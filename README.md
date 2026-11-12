@@ -15,7 +15,7 @@ Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchem
 - [x] Configuración validada por variables de entorno (`app/config.py`)
 - [x] Pruebas unitarias (configuración y endpoint raíz) y de integración (`get_db` contra PostgreSQL)
 - [x] Modelos SQLAlchemy (usuarios con rol, categorías, productos, movimientos de stock) y migración inicial con Alembic
-- [ ] Endpoints CRUD
+- [x] Catálogo: endpoints de categorías y productos (permisos por rol, paginación, búsqueda y filtros)
 - [x] Autenticación JWT con roles (`admin`, `operator`) y gestión de usuarios
 - [x] Integración continua con GitHub Actions (pruebas unitarias y de integración con PostgreSQL)
 
@@ -31,7 +31,8 @@ backend/
     security.py    Hash argon2 de contraseñas y tokens JWT
     deps.py        get_current_user y require_role
     schemas.py     Esquemas Pydantic de entrada y salida
-    routers/       auth.py (login, me) y users.py (gestión de usuarios)
+    routers/       auth, users, categories y products
+    errors.py      Formato de error único de la API
     cli.py         Comandos de consola (create-admin)
   alembic/         Entorno y migraciones (versions/)
   alembic.ini
@@ -97,7 +98,26 @@ Reglas de integridad en la base de datos:
 - `products.stock >= 0` y `products.price >= 0` (CHECK).
 - Movimientos: `entrada` y `salida` con cantidad positiva; `ajuste` con cantidad distinta de cero y con signo.
 - Las claves foráneas son `RESTRICT`: no se puede borrar un producto, usuario o categoría con registros asociados.
+- Categorías y productos tienen `is_active` para el borrado lógico.
 - Roles (`admin`, `operator`) y tipos de movimiento (`entrada`, `salida`, `ajuste`) son enums de PostgreSQL.
+
+## Catálogo: categorías y productos
+
+Lectura para `admin` y `operator`; escritura solo `admin`. La documentación interactiva está en `/docs`.
+
+| Endpoint | Rol |
+|---|---|
+| `GET /categories`, `GET /categories/{id}` | admin, operator |
+| `POST /categories`, `PATCH /categories/{id}`, `DELETE /categories/{id}` | admin |
+| `GET /products`, `GET /products/{id}` | admin, operator |
+| `POST /products`, `PATCH /products/{id}`, `DELETE /products/{id}` | admin |
+
+- **Borrar = `is_active=false`** (borrado lógico, idempotente); se restaura con `PATCH` y `is_active=true`. Los inactivos no aparecen en las listas ni (para el `operator`) en el detalle; el `admin` los ve con `include_inactive=true`. No se puede desactivar una categoría con productos activos (409).
+- **El stock no se edita por la API de productos.** Nace en 0 y solo cambiará con movimientos de stock; enviar `stock` al crear o actualizar devuelve 422.
+- **Paginación**: `limit` (1-100, 20 por defecto) y `offset`. La respuesta es `{items, total, limit, offset}`.
+- **Búsqueda y filtros de productos**: `q` (texto en nombre o SKU, sin distinguir mayúsculas; `%` y `_` se tratan como texto), `category_id` y `low_stock=true` (stock <= `threshold`, 10 por defecto). Las categorías admiten `q` por nombre.
+- **SKU**: se normaliza a mayúsculas, admite letras, dígitos, `.`, `-` y `_`, y es único (409 si se repite). El precio admite como máximo 2 decimales y no puede ser negativo. Un producto solo puede asignarse a una categoría existente y activa (422).
+- **Formato de error único**: `{"detail": "mensaje", "code": "not_found", "errors": [{"field": "body.price", "message": "..."}]}`. `errors` solo aparece en validaciones (422) y nunca incluye los valores enviados. Códigos: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `validation_error`.
 
 ## Autenticación y roles
 

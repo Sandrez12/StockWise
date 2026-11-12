@@ -57,3 +57,5 @@ def require_role(*roles: UserRole):
 
 
 AdminUser = Annotated[User, Depends(require_role(UserRole.ADMIN))]
+# Cualquier usuario autenticado y activo con un rol válido (lectura del catálogo).
+StaffUser = Annotated[User, Depends(require_role(UserRole.ADMIN, UserRole.OPERATOR))]

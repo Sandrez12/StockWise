@@ -1,5 +1,6 @@
 import os
 import re
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from sqlalchemy import create_engine, text
 from app.config import get_settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import User, UserRole
+from app.models import Category, Product, User, UserRole
 from app.security import hash_password
 
 _SAFE_NAME = re.compile(r"^[a-z0-9_]+_test$")
@@ -132,3 +133,31 @@ def admin_headers(make_user, login):
 def operator_headers(make_user, login):
     make_user("operator@example.com", UserRole.OPERATOR)
     return login("operator@example.com")
+
+
+@pytest.fixture
+def make_category(db):
+    def _make(name="Bebidas", is_active=True, description=None):
+        category = Category(name=name, is_active=is_active, description=description)
+        db.add(category)
+        db.commit()
+        db.refresh(category)
+        return category
+
+    return _make
+
+
+@pytest.fixture
+def make_product(db, make_category):
+    def _make(sku="SKU-1", name="Agua", price="1.50", stock=0, is_active=True, category=None):
+        category = category or make_category(f"Cat de {sku}")
+        product = Product(
+            sku=sku, name=name, price=Decimal(price), stock=stock,
+            is_active=is_active, category_id=category.id,
+        )
+        db.add(product)
+        db.commit()
+        db.refresh(product)
+        return product
+
+    return _make

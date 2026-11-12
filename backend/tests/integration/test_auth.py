@@ -39,14 +39,15 @@ def test_login_wrong_password_and_unknown_email_look_identical(client, make_user
     wrong = client.post("/auth/login", data=_form("ana@example.com", "otra-contraseña-123"))
     unknown = client.post("/auth/login", data=_form("nadie@example.com"))
     assert wrong.status_code == unknown.status_code == 401
-    assert wrong.json() == unknown.json() == {"detail": "Correo o contraseña incorrectos"}
+    expected = {"detail": "Correo o contraseña incorrectos", "code": "unauthorized"}
+    assert wrong.json() == unknown.json() == expected
 
 
 def test_login_inactive_user_gets_same_generic_error(client, make_user):
     make_user("off@example.com", is_active=False)
     r = client.post("/auth/login", data=_form("off@example.com"))
     assert r.status_code == 401
-    assert r.json() == {"detail": "Correo o contraseña incorrectos"}
+    assert r.json() == {"detail": "Correo o contraseña incorrectos", "code": "unauthorized"}
 
 
 def test_me_returns_current_user_without_hash(client, make_user, login):

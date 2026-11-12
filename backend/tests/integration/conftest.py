@@ -1,10 +1,18 @@
 import os
 import re
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from app.config import get_settings
+from app.database import SessionLocal
+from app.main import app
+from app.models import User, UserRole
+from app.security import hash_password
 
 _SAFE_NAME = re.compile(r"^[a-z0-9_]+_test$")
 
@@ -43,3 +51,84 @@ def test_database():
     finally:
         admin.dispose()
     return name
+
+
+# --- Fixtures para pruebas de la API (esquema migrado y tablas vacías) -------
+
+_BACKEND = Path(__file__).resolve().parents[2]
+TEST_PASSWORD = "contraseña-de-prueba-123"
+
+
+@pytest.fixture(scope="module")
+def schema(test_database):
+    """Base _test con el esquema recreado y migrado hasta head (una vez por módulo)."""
+    engine = create_engine(get_settings().database_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    engine.dispose()
+    cfg = Config(str(_BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_BACKEND / "alembic"))
+    command.upgrade(cfg, "head")
+
+
+@pytest.fixture
+def db(schema):
+    """Sesión de pruebas; antes de cada prueba deja todas las tablas vacías."""
+    with SessionLocal() as session:
+        session.execute(
+            text(
+                "TRUNCATE stock_movements, products, categories, users "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
+        session.commit()
+        yield session
+
+
+@pytest.fixture
+def client(db):
+    return TestClient(app)
+
+
+@pytest.fixture
+def make_user(db):
+    def _make(email="user@example.com", role=UserRole.OPERATOR, is_active=True,
+              password=TEST_PASSWORD, full_name="Usuario de Prueba"):
+        user = User(
+            email=email,
+            full_name=full_name,
+            hashed_password=hash_password(password),
+            role=role,
+            is_active=is_active,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    return _make
+
+
+@pytest.fixture
+def login(client):
+    """Devuelve cabeceras Authorization tras iniciar sesión por la API."""
+
+    def _login(email, password=TEST_PASSWORD):
+        response = client.post("/auth/login", data={"username": email, "password": password})
+        assert response.status_code == 200, response.text
+        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    return _login
+
+
+@pytest.fixture
+def admin_headers(make_user, login):
+    make_user("admin@example.com", UserRole.ADMIN)
+    return login("admin@example.com")
+
+
+@pytest.fixture
+def operator_headers(make_user, login):
+    make_user("operator@example.com", UserRole.OPERATOR)
+    return login("operator@example.com")

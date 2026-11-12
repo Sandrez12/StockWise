@@ -9,6 +9,7 @@ VARS = (
     "POSTGRES_HOST",
     "POSTGRES_PORT",
     "POSTGRES_DB",
+    "SECRET_KEY",
 )
 
 
@@ -31,6 +32,7 @@ def set_env(monkeypatch, **overrides):
         "POSTGRES_HOST": "db.local",
         "POSTGRES_PORT": "5433",
         "POSTGRES_DB": "mydb",
+        "SECRET_KEY": "k" * 40,
     }
     values.update(overrides)
     for name, value in values.items():
@@ -88,3 +90,49 @@ def test_password_with_special_characters_is_escaped(monkeypatch):
     assert rendered.count("@") == 1
     # ...y al reinterpretarla se recupera la contraseña original.
     assert make_url(rendered).password == password
+
+
+def test_missing_secret_key_is_reported(monkeypatch):
+    set_env(monkeypatch)
+    monkeypatch.delenv("SECRET_KEY")
+    with pytest.raises(ConfigError, match="SECRET_KEY"):
+        get_settings()
+
+
+def test_short_secret_key_is_rejected_with_clear_message(monkeypatch):
+    set_env(monkeypatch, SECRET_KEY="corta")
+    with pytest.raises(ConfigError, match=r"SECRET_KEY.*al menos 32.*tiene 5"):
+        get_settings()
+
+
+def test_placeholder_secret_key_from_example_is_rejected(monkeypatch):
+    set_env(monkeypatch, SECRET_KEY="REEMPLAZAR")
+    with pytest.raises(ConfigError, match="SECRET_KEY"):
+        get_settings()
+
+
+def test_token_expiry_defaults_to_30_minutes(monkeypatch):
+    set_env(monkeypatch)
+    monkeypatch.delenv("ACCESS_TOKEN_EXPIRE_MINUTES", raising=False)
+    assert get_settings().access_token_expire_minutes == 30
+
+
+def test_token_expiry_is_configurable(monkeypatch):
+    set_env(monkeypatch)
+    monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "5")
+    assert get_settings().access_token_expire_minutes == 5
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-3"])
+def test_invalid_token_expiry_is_rejected(monkeypatch, value):
+    set_env(monkeypatch)
+    monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", value)
+    with pytest.raises(ConfigError, match="ACCESS_TOKEN_EXPIRE_MINUTES"):
+        get_settings()
+
+
+def test_settings_repr_hides_secrets(monkeypatch):
+    set_env(monkeypatch, POSTGRES_PASSWORD="hunter2-password")
+    text = repr(get_settings())
+    assert "hunter2-password" not in text
+    assert "k" * 40 not in text

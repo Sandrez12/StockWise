@@ -1,6 +1,6 @@
 # StockWise
 
-Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchemy** y **PostgreSQL**. Proyecto en desarrollo: por ahora contiene la base de la API y la conexión a la base de datos.
+Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchemy** y **PostgreSQL**. API REST con autenticación JWT y roles, catálogo de categorías y productos, y movimientos de stock con bloqueo de filas, migraciones con Alembic, pruebas automatizadas e integración continua. Proyecto en desarrollo: aún no está desplegado.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi&logoColor=white)

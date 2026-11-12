@@ -129,8 +129,8 @@ def test_invalid_movement_quantity_is_rejected(migrated, type_, quantity):
             ).scalar()
             conn.execute(
                 text(
-                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, reason) "
-                    "VALUES (:p, :u, :t, :q, 'prueba')"
+                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, stock_after, reason) "
+                    "VALUES (:p, :u, :t, :q, 1, 'prueba')"
                 ),
                 {"p": product, "u": user, "t": type_, "q": quantity},
             )
@@ -147,8 +147,8 @@ def test_negative_adjustment_is_allowed(migrated):
         ).scalar()
         conn.execute(
             text(
-                "INSERT INTO stock_movements (product_id, user_id, type, quantity, reason) "
-                "VALUES (:p, :u, 'ajuste', -2, 'merma')"
+                "INSERT INTO stock_movements (product_id, user_id, type, quantity, stock_after, reason) "
+                "VALUES (:p, :u, 'ajuste', -2, 3, 'merma')"
             ),
             {"p": product, "u": user},
         )
@@ -177,8 +177,8 @@ def test_cannot_delete_product_with_movements(migrated):
             ).scalar()
             conn.execute(
                 text(
-                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, reason) "
-                    "VALUES (:p, :u, 'entrada', 1, 'x')"
+                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, stock_after, reason) "
+                    "VALUES (:p, :u, 'entrada', 1, 1, 'x')"
                 ),
                 {"p": product, "u": user},
             )
@@ -194,3 +194,65 @@ def test_downgrade_removes_everything(migrated):
             text("SELECT typname FROM pg_type WHERE typname IN ('user_role', 'movement_type')")
         ).all()
     assert enums == []
+
+
+def test_stock_after_is_backfilled_from_running_signed_sum(engine):
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    cfg = _alembic_config()
+    command.upgrade(cfg, "0003")  # esquema anterior: movimientos sin stock_after
+    with engine.begin() as conn:
+        cat = _insert_category(conn)
+        a = _insert_product(conn, cat, sku="A")
+        b = _insert_product(conn, cat, sku="B")
+        user = conn.execute(
+            text(
+                "INSERT INTO users (email, full_name, hashed_password, role) "
+                "VALUES ('a@b.c', 'A', 'x', 'admin') RETURNING id"
+            )
+        ).scalar()
+        for product, type_, quantity in [
+            (a, "entrada", 10), (b, "entrada", 4), (a, "salida", 3), (a, "ajuste", -2), (b, "salida", 1),
+        ]:
+            conn.execute(
+                text(
+                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, reason) "
+                    "VALUES (:p, :u, :t, :q, 'previo')"
+                ),
+                {"p": product, "u": user, "t": type_, "q": quantity},
+            )
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT product_id, stock_after FROM stock_movements ORDER BY id")
+        ).all()
+    assert rows == [(a, 10), (b, 4), (a, 7), (a, 5), (b, 3)]
+
+
+def test_negative_stock_after_is_rejected(migrated):
+    with pytest.raises(IntegrityError, match="ck_stock_movements_stock_after_non_negative"):
+        with migrated.begin() as conn:
+            product = _insert_product(conn, _insert_category(conn))
+            user = conn.execute(
+                text(
+                    "INSERT INTO users (email, full_name, hashed_password, role) "
+                    "VALUES ('a@b.c', 'A', 'x', 'admin') RETURNING id"
+                )
+            ).scalar()
+            conn.execute(
+                text(
+                    "INSERT INTO stock_movements (product_id, user_id, type, quantity, stock_after, reason) "
+                    "VALUES (:p, :u, 'entrada', 1, -1, 'x')"
+                ),
+                {"p": product, "u": user},
+            )
+
+
+def test_downgrade_removes_trigger_function(migrated):
+    command.downgrade(_alembic_config(), "base")
+    with migrated.connect() as conn:
+        funcs = conn.execute(
+            text("SELECT proname FROM pg_proc WHERE proname = 'forbid_stock_movement_change'")
+        ).all()
+    assert funcs == []

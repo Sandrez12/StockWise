@@ -162,3 +162,41 @@ def make_product(db, make_category):
         return product
 
     return _make
+
+
+@pytest.fixture
+def move(client):
+    """POST /stock-movements con valores por defecto razonables."""
+
+    def _move(headers, product_id, type="entrada", quantity=1, reason="prueba", **extra):
+        body = {"product_id": product_id, "type": type, "quantity": quantity, "reason": reason}
+        return client.post("/stock-movements", json=body | extra, headers=headers)
+
+    return _move
+
+
+@pytest.fixture
+def stock_invariant(db):
+    """Devuelve una función que comprueba stock == suma de movimientos firmados.
+
+    Solo vale para productos cuyo stock nació en 0 y se movió por la API.
+    """
+
+    def _check():
+        db.rollback()  # ver el estado confirmado más reciente
+        rows = db.execute(
+            text(
+                """
+                SELECT p.id, p.stock,
+                       COALESCE(SUM(CASE WHEN m.type = 'salida' THEN -m.quantity
+                                         ELSE m.quantity END), 0) AS signed_sum
+                FROM products p LEFT JOIN stock_movements m ON m.product_id = p.id
+                GROUP BY p.id, p.stock
+                HAVING p.stock <> COALESCE(SUM(CASE WHEN m.type = 'salida' THEN -m.quantity
+                                                    ELSE m.quantity END), 0)
+                """
+            )
+        ).all()
+        assert rows == [], f"Invariante rota (id, stock, suma): {rows}"
+
+    return _check

@@ -16,6 +16,7 @@ Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchem
 - [x] Pruebas unitarias (configuración y endpoint raíz) y de integración (`get_db` contra PostgreSQL)
 - [x] Modelos SQLAlchemy (usuarios con rol, categorías, productos, movimientos de stock) y migración inicial con Alembic
 - [x] Catálogo: endpoints de categorías y productos (permisos por rol, paginación, búsqueda y filtros)
+- [x] Movimientos de stock (entradas, salidas, ajustes y conteo físico) con bloqueo de fila e historial inmutable
 - [x] Autenticación JWT con roles (`admin`, `operator`) y gestión de usuarios
 - [x] Integración continua con GitHub Actions (pruebas unitarias y de integración con PostgreSQL)
 
@@ -31,7 +32,9 @@ backend/
     security.py    Hash argon2 de contraseñas y tokens JWT
     deps.py        get_current_user y require_role
     schemas.py     Esquemas Pydantic de entrada y salida
-    routers/       auth, users, categories y products
+    routers/       auth, users, categories, products y stock
+    services/      stock.py: lógica transaccional de movimientos y conteo
+    ratelimit.py   Límite de intentos de login (en memoria)
     errors.py      Formato de error único de la API
     cli.py         Comandos de consola (create-admin)
   alembic/         Entorno y migraciones (versions/)
@@ -113,11 +116,46 @@ Lectura para `admin` y `operator`; escritura solo `admin`. La documentación int
 | `POST /products`, `PATCH /products/{id}`, `DELETE /products/{id}` | admin |
 
 - **Borrar = `is_active=false`** (borrado lógico, idempotente); se restaura con `PATCH` y `is_active=true`. Los inactivos no aparecen en las listas ni (para el `operator`) en el detalle; el `admin` los ve con `include_inactive=true`. No se puede desactivar una categoría con productos activos (409).
-- **El stock no se edita por la API de productos.** Nace en 0 y solo cambiará con movimientos de stock; enviar `stock` al crear o actualizar devuelve 422.
+- **El stock no se edita por la API de productos.** Nace en 0 y solo cambia con movimientos de stock (ver más abajo); enviar `stock` al crear o actualizar devuelve 422.
 - **Paginación**: `limit` (1-100, 20 por defecto) y `offset`. La respuesta es `{items, total, limit, offset}`.
 - **Búsqueda y filtros de productos**: `q` (texto en nombre o SKU, sin distinguir mayúsculas; `%` y `_` se tratan como texto), `category_id` y `low_stock=true` (productos con `stock <= min_stock`; el umbral `min_stock`, 0 por defecto, es propio de cada producto y se edita con `PATCH`). Las categorías admiten `q` por nombre.
 - **SKU**: se normaliza a mayúsculas, admite letras, dígitos, `.`, `-` y `_`, y es único (409 si se repite). El precio admite como máximo 2 decimales y no puede ser negativo. Un producto solo puede asignarse a una categoría existente y activa (422).
 - **Formato de error único**: `{"detail": "mensaje", "code": "not_found", "errors": [{"field": "body.price", "message": "..."}]}`. `errors` solo aparece en validaciones (422) y nunca incluye los valores enviados. Códigos: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `validation_error`.
+
+## Movimientos de stock
+
+| Endpoint | Rol |
+|---|---|
+| `POST /stock-movements` `entrada` o `salida` (cantidad positiva) | admin, operator |
+| `POST /stock-movements` `ajuste` (cantidad con signo: + suma, - resta) | admin |
+| `POST /products/{id}/stock-count` conteo físico | admin |
+| `GET /stock-movements` (filtros `product_id`, `type`, `user_id`, `date_from`, `date_to`; paginado, del más reciente al más antiguo) | admin, operator |
+
+- El **usuario** del movimiento sale siempre del token; enviar `user_id` en el cuerpo devuelve 422.
+- **Salida sin stock suficiente** (o ajuste que lo dejaría negativo): `409` con `code: "insufficient_stock"` y no cambia nada. Producto inactivo: `409` con `code: "inactive_product"`.
+- **Conteo físico**: recibe `counted` (y una `note` opcional), calcula la diferencia con el stock registrado **bajo bloqueo** y registra un `ajuste` con esa diferencia (`Conteo físico: <nota>`). Si la diferencia es 0 no crea movimiento y responde `changed: false`.
+- Los movimientos son **inmutables**: no hay `PATCH` ni `DELETE`, y un trigger de PostgreSQL rechaza `UPDATE` y `DELETE` sobre `stock_movements` aunque alguien llegue a la base por otra vía.
+- Fechas en ISO 8601 (sin zona se asumen UTC); `date_from` y `date_to` son inclusivos.
+
+## Concurrencia e integridad
+
+El stock es una columna de `products` (`stock`) que se mantiene junto al historial de movimientos. Dos peticiones simultáneas sobre el mismo producto no deben pisarse, y por eso **nunca** se hace lectura-modificación-escritura sin bloqueo.
+
+**Por qué no basta leer, calcular y guardar.** Con dos salidas de 1 unidad sobre un producto con stock 1, ambas leerían `stock = 1`, ambas verían que alcanza y ambas escribirían `stock = 0`: se habrían vendido 2 unidades con una sola en inventario (actualización perdida). Con `READ COMMITTED`, que es el nivel por defecto de PostgreSQL, nada lo impide por sí solo.
+
+**Diseño** (`app/services/stock.py`). Cada movimiento ocurre en una sola transacción:
+
+1. `SELECT ... FOR UPDATE` sobre la fila del producto: las peticiones concurrentes sobre ese producto se **serializan**; las de otros productos no se bloquean entre sí.
+2. Se valida sobre el valor ya bloqueado (producto activo, stock suficiente).
+3. Se actualiza `products.stock`.
+4. Se inserta el movimiento con `stock_after`, la **instantánea del stock resultante** (auditoría: permite reconstruir el estado tras cada operación sin sumar todo el historial). `created_at` usa `clock_timestamp()` con el bloqueo ya tomado, así que es monótona por producto aunque haya esperas.
+5. `COMMIT`: libera el bloqueo. Cualquier error hace `ROLLBACK` y no queda nada a medias.
+
+**Red de seguridad.** La base de datos impone, aunque se saltara la aplicación: `CHECK (stock >= 0)`, `CHECK (stock_after >= 0)`, cantidades válidas según el tipo de movimiento, claves foráneas `RESTRICT` y el trigger de inmutabilidad. El `CHECK` no sustituye al bloqueo: sin él, la carrera anterior seguiría perdiendo actualizaciones mientras el stock fuera suficiente; con él, nunca se puede quedar negativo.
+
+**Invariante.** Para todo producto cuyo stock nació en 0 (todos los creados por la API), `stock == suma de los movimientos firmados` (entrada y ajuste suman con su signo; salida resta). Y para cada movimiento, `stock_after` es la suma acumulada hasta él. Las pruebas lo comprueban tras cada escenario.
+
+**Pruebas de concurrencia reales** (`tests/integration/test_concurrency.py`): hilos con sus propios clientes y conexiones a PostgreSQL, sin mocks y lanzados a la vez con una barrera. Por ejemplo, 20 salidas de 1 unidad sobre un producto con stock 10 dan exactamente 10 éxitos y 10 `409`, stock final 0 y 10 movimientos; una mezcla concurrente de entradas, salidas, ajustes y conteos mantiene el invariante.
 
 ## Autenticación y roles
 
@@ -133,7 +171,7 @@ Lectura para `admin` y `operator`; escritura solo `admin`. La documentación int
 | `PATCH /users/{id}/role` cambiar rol | admin |
 | `PATCH /users/{id}/active` activar o desactivar | admin |
 
-Permisos previstos: el `admin` gestiona usuarios, categorías y productos; el `operator` solo consulta y registra movimientos de stock.
+Permisos: el `admin` gestiona usuarios, categorías y productos, registra ajustes y hace conteos; el `operator` consulta el catálogo y los movimientos, y registra entradas y salidas de stock.
 
 Detalles de seguridad:
 

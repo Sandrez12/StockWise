@@ -33,3 +33,15 @@ os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
 
 # Indica a las pruebas de integración si hay credenciales reales de prueba.
 os.environ["STOCKWISE_INTEGRATION"] = "1" if _integration else "0"
+
+import pytest  # noqa: E402
+
+from app.ratelimit import login_limiter  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """El límite de login vive en memoria: se vacía para aislar cada prueba."""
+    login_limiter.clear()
+    yield
+    login_limiter.clear()

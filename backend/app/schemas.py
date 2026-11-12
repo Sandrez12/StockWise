@@ -11,7 +11,9 @@ from app.models import UserRole
 
 T = TypeVar("T")
 
-_SKU_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9._-]*$")
+MAX_INT = 2_147_483_647  # límite de INTEGER en PostgreSQL
+
+_SKU_PATTERN =re.compile(r"^[A-Z0-9][A-Z0-9._-]*$")
 
 
 class ErrorDetail(BaseModel):
@@ -149,6 +151,9 @@ class ProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     price: Decimal = Money
+    min_stock: int = Field(
+        default=0, ge=0, le=MAX_INT, description="Umbral de stock bajo: low_stock = stock <= min_stock"
+    )
     category_id: int
 
     @field_validator("sku")
@@ -173,6 +178,7 @@ class ProductUpdate(BaseModel):
     price: Decimal | None = Field(
         default=None, ge=0, max_digits=12, decimal_places=2, description="Precio, máximo 2 decimales"
     )
+    min_stock: int | None = Field(default=None, ge=0, le=MAX_INT)
     category_id: int | None = None
     is_active: bool | None = None
 
@@ -196,6 +202,7 @@ class ProductRead(BaseModel):
     description: str | None
     price: Decimal
     stock: int
+    min_stock: int
     is_active: bool
     category_id: int
     created_at: datetime

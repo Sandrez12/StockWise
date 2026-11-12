@@ -1,9 +1,14 @@
+# Levantar con:  docker compose --env-file backend/.env up -d
+# Las variables solo se usan para interpolar: al contenedor llegan únicamente
+# POSTGRES_USER, POSTGRES_PASSWORD y POSTGRES_DB (nunca SECRET_KEY).
 services:
   db:
     image: postgres:16
     container_name: stockwise-db
-    env_file:
-      - backend/.env
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?Falta POSTGRES_USER, usa --env-file backend/.env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD, usa --env-file backend/.env}"
+      POSTGRES_DB: "${POSTGRES_DB:?Falta POSTGRES_DB, usa --env-file backend/.env}"
     ports:
       - "5432:5432"
     volumes:

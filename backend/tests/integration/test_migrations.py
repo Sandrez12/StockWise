@@ -79,6 +79,27 @@ def test_negative_stock_is_rejected(migrated):
             _insert_product(conn, _insert_category(conn), stock=-1)
 
 
+def test_negative_min_stock_is_rejected(migrated):
+    with pytest.raises(IntegrityError, match="ck_products_min_stock_non_negative"):
+        with migrated.begin() as conn:
+            cat = _insert_category(conn)
+            conn.execute(
+                text(
+                    "INSERT INTO products (sku, name, price, min_stock, category_id) "
+                    "VALUES ('P', 'X', 1, -1, :cat)"
+                ),
+                {"cat": cat},
+            )
+
+
+def test_min_stock_defaults_to_zero(migrated):
+    with migrated.begin() as conn:
+        product = _insert_product(conn, _insert_category(conn))
+        assert conn.execute(
+            text("SELECT min_stock FROM products WHERE id = :p"), {"p": product}
+        ).scalar() == 0
+
+
 def test_negative_price_is_rejected(migrated):
     with pytest.raises(IntegrityError, match="ck_products_price_non_negative"):
         with migrated.begin() as conn:

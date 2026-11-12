@@ -149,10 +149,11 @@ def make_category(db):
 
 @pytest.fixture
 def make_product(db, make_category):
-    def _make(sku="SKU-1", name="Agua", price="1.50", stock=0, is_active=True, category=None):
+    def _make(sku="SKU-1", name="Agua", price="1.50", stock=0, is_active=True, category=None,
+              min_stock=0):
         category = category or make_category(f"Cat de {sku}")
         product = Product(
-            sku=sku, name=name, price=Decimal(price), stock=stock,
+            sku=sku, name=name, price=Decimal(price), stock=stock, min_stock=min_stock,
             is_active=is_active, category_id=category.id,
         )
         db.add(product)

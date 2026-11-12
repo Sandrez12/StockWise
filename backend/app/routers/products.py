@@ -21,9 +21,6 @@ NOT_FOUND = {404: {"model": ErrorResponse, "description": "Producto no encontrad
 CONFLICT = {409: {"model": ErrorResponse, "description": "SKU duplicado"}}
 INVALID = {422: {"model": ErrorResponse, "description": "Datos inválidos"}}
 
-DEFAULT_LOW_STOCK_THRESHOLD = 10
-
-
 def _escape_like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -67,6 +64,7 @@ def create_product(data: ProductCreate, db: DbSession, _admin: AdminUser) -> Pro
         name=data.name,
         description=data.description,
         price=data.price,
+        min_stock=data.min_stock,
         category_id=data.category_id,
         stock=0,
     )
@@ -87,7 +85,7 @@ def create_product(data: ProductCreate, db: DbSession, _admin: AdminUser) -> Pro
     description=(
         "Administradores y operadores. Por defecto solo los activos (`include_inactive=true` es "
         "exclusivo de administradores). `q` busca en nombre o SKU. `low_stock=true` devuelve los "
-        "productos con `stock <= threshold` (10 por defecto)."
+        "productos con `stock <= min_stock` (el umbral es propio de cada producto)."
     ),
 )
 def list_products(
@@ -95,10 +93,9 @@ def list_products(
     user: StaffUser,
     q: Annotated[str | None, Query(max_length=100, description="Texto en nombre o SKU")] = None,
     category_id: Annotated[int | None, Query(description="Filtrar por categoría")] = None,
-    low_stock: Annotated[bool, Query(description="Solo productos con stock bajo")] = False,
-    threshold: Annotated[
-        int, Query(ge=0, description="Umbral de stock bajo (stock <= umbral)")
-    ] = DEFAULT_LOW_STOCK_THRESHOLD,
+    low_stock: Annotated[
+        bool, Query(description="Solo productos con stock <= min_stock")
+    ] = False,
     include_inactive: bool = False,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -116,7 +113,7 @@ def list_products(
     if category_id is not None:
         filters.append(Product.category_id == category_id)
     if low_stock:
-        filters.append(Product.stock <= threshold)
+        filters.append(Product.stock <= Product.min_stock)
     total = db.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
     rows = db.scalars(
         select(Product).where(*filters).order_by(Product.id).limit(limit).offset(offset)

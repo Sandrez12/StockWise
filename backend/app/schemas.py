@@ -5,9 +5,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import UserRole
+from app.models import MovementType, UserRole
 
 T = TypeVar("T")
 
@@ -207,3 +207,73 @@ class ProductRead(BaseModel):
     category_id: int
     created_at: datetime
     updated_at: datetime
+
+
+# --- Movimientos de stock ----------------------------------------------------
+
+
+class MovementCreate(BaseModel):
+    """El usuario del movimiento sale del token: enviar `user_id` es un error 422."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: int
+    type: MovementType
+    quantity: int = Field(
+        ge=-MAX_INT,
+        le=MAX_INT,
+        description=(
+            "Entero distinto de cero. En `entrada` y `salida` debe ser positivo (el tipo indica "
+            "el sentido); en `ajuste` lleva signo (+ suma, - resta)."
+        ),
+    )
+    reason: str = Field(min_length=1, max_length=255, description="Motivo del movimiento")
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, value: str) -> str:
+        return _clean_text(value)
+
+    @model_validator(mode="after")
+    def _quantity_matches_type(self) -> "MovementCreate":
+        if self.type == MovementType.AJUSTE:
+            if self.quantity == 0:
+                raise ValueError("En un ajuste la cantidad no puede ser 0")
+        elif self.quantity <= 0:
+            raise ValueError("En entrada y salida la cantidad debe ser positiva")
+        return self
+
+
+class MovementRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    product_id: int
+    user_id: int
+    type: MovementType
+    quantity: int
+    stock_after: int = Field(description="Stock del producto justo después de este movimiento")
+    reason: str
+    created_at: datetime
+
+
+class StockCount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    counted: int = Field(ge=0, le=MAX_INT, description="Unidades contadas físicamente")
+    note: str | None = Field(default=None, max_length=200, description="Nota opcional del conteo")
+
+    @field_validator("note")
+    @classmethod
+    def _note(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
+class StockCountResult(BaseModel):
+    product_id: int
+    previous_stock: int
+    counted: int
+    difference: int = Field(description="counted - previous_stock")
+    changed: bool = Field(description="False si no hubo diferencia y no se creó movimiento")
+    message: str
+    movement: MovementRead | None = None

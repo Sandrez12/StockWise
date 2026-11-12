@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.errors import register_exception_handlers
-from app.routers import auth, categories, products, users
+from app.routers import auth, categories, products, stock, users
 
 TAGS = [
     {"name": "Estado", "description": "Comprobación de que la API responde."},
@@ -16,6 +16,12 @@ TAGS = [
         "description": (
             "Lectura: admin y operator. Escritura: solo admin. Borrar = `is_active=false`. "
             "El stock solo cambia con movimientos."
+        ),
+    },
+    {
+        "name": "Movimientos de stock",
+        "description": (
+            "Entradas, salidas y ajustes con bloqueo de fila; conteo físico; historial inmutable."
         ),
     },
 ]
@@ -35,6 +41,7 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(categories.router)
 app.include_router(products.router)
+app.include_router(stock.router)
 
 
 @app.get("/", tags=["Estado"], summary="Estado de la API")

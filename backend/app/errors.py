@@ -17,6 +17,14 @@ _CODES = {
 }
 
 
+class ApiError(StarletteHTTPException):
+    """Error HTTP con un `code` propio y estable (p. ej. insufficient_stock)."""
+
+    def __init__(self, status_code: int, detail: str, code: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+
+
 def _field_name(loc: tuple) -> str:
     return ".".join(str(part) for part in loc)
 
@@ -25,7 +33,10 @@ async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:
     detail = exc.detail if isinstance(exc.detail, str) else "Error"
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": detail, "code": _CODES.get(exc.status_code, "http_error")},
+        content={
+            "detail": detail,
+            "code": getattr(exc, "code", None) or _CODES.get(exc.status_code, "http_error"),
+        },
         headers=getattr(exc, "headers", None),
     )
 

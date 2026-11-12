@@ -104,6 +104,8 @@ class Product(TimestampMixin, Base):
 class StockMovement(Base):
     """Movimiento de inventario. Es un registro de auditoría: no se actualiza.
 
+    La base de datos lo impone con un trigger que rechaza UPDATE y DELETE.
+
     `quantity` es siempre entero distinto de cero: positivo en entrada y salida
     (el tipo indica el sentido) y con signo en ajuste (+ suma, - resta).
     """
@@ -114,6 +116,7 @@ class StockMovement(Base):
             "(type = 'ajuste' AND quantity <> 0) OR (type <> 'ajuste' AND quantity > 0)",
             name="ck_stock_movements_quantity_valid",
         ),
+        CheckConstraint("stock_after >= 0", name="ck_stock_movements_stock_after_non_negative"),
         Index("ix_stock_movements_product_id_created_at", "product_id", "created_at"),
         Index("ix_stock_movements_user_id", "user_id"),
     )
@@ -123,6 +126,8 @@ class StockMovement(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     type: Mapped[MovementType] = mapped_column(_enum(MovementType, "movement_type"))
     quantity: Mapped[int]
+    # Stock del producto justo después de este movimiento (auditoría).
+    stock_after: Mapped[int]
     reason: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

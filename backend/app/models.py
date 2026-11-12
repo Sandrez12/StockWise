@@ -81,6 +81,7 @@ class Product(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("stock >= 0", name="ck_products_stock_non_negative"),
         CheckConstraint("price >= 0", name="ck_products_price_non_negative"),
+        CheckConstraint("min_stock >= 0", name="ck_products_min_stock_non_negative"),
         Index("ix_products_category_id", "category_id"),
         Index("ix_products_name", "name"),
     )
@@ -91,6 +92,8 @@ class Product(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     stock: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Umbral de stock bajo del producto: low_stock = stock <= min_stock.
+    min_stock: Mapped[int] = mapped_column(default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id", ondelete="RESTRICT"))
 

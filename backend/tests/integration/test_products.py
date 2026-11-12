@@ -184,23 +184,55 @@ def test_filter_by_category(client, admin_headers, make_product, make_category):
 
 def test_filter_low_stock(client, admin_headers, make_product, make_category):
     cat = make_category()
-    for sku, stock in [("S-0", 0), ("S-5", 5), ("S-10", 10), ("S-11", 11), ("S-50", 50)]:
-        make_product(sku, stock=stock, category=cat)
+    # (sku, stock, min_stock): bajo cuando stock <= min_stock
+    rows = [("S-0", 0, 0), ("S-5", 5, 5), ("S-6", 6, 5), ("S-3", 3, 10), ("S-50", 50, 10)]
+    for sku, stock, min_stock in rows:
+        make_product(sku, stock=stock, min_stock=min_stock, category=cat)
 
     def skus(**params):
         r = client.get("/products", params=params, headers=admin_headers).json()
         return sorted(p["sku"] for p in r["items"])
 
-    assert skus(low_stock="true") == ["S-0", "S-10", "S-5"]
-    assert skus(low_stock="true", threshold=5) == ["S-0", "S-5"]
-    assert skus(low_stock="true", threshold=0) == ["S-0"]
+    assert skus(low_stock="true") == ["S-0", "S-3", "S-5"]
     assert len(skus()) == 5
-    assert client.get("/products?threshold=-1", headers=admin_headers).status_code == 422
+    assert len(skus(low_stock="false")) == 5
+
+
+def test_threshold_query_param_no_longer_exists(client, admin_headers, make_product):
+    make_product("S-1", stock=1, min_stock=0)
+    r = client.get("/products?low_stock=true&threshold=100", headers=admin_headers)
+    assert r.status_code == 200
+    assert r.json()["total"] == 0  # el parámetro se ignora; manda min_stock
+
+
+def test_min_stock_defaults_to_zero_and_is_editable(client, admin_headers, make_category):
+    cat = make_category()
+    created = client.post(
+        "/products",
+        json={"sku": "M-1", "name": "Con umbral", "price": "1.00", "category_id": cat.id},
+        headers=admin_headers,
+    ).json()
+    assert created["min_stock"] == 0
+    r = client.patch(f"/products/{created['id']}", json={"min_stock": 8}, headers=admin_headers)
+    assert r.status_code == 200 and r.json()["min_stock"] == 8
+    with_value = client.post(
+        "/products",
+        json={"sku": "M-2", "name": "Otro", "price": "1.00", "category_id": cat.id, "min_stock": 4},
+        headers=admin_headers,
+    )
+    assert with_value.json()["min_stock"] == 4
+
+
+def test_min_stock_validation(client, admin_headers, make_product):
+    product = make_product("M-1")
+    for bad in (-1, "abc", 2_147_483_648):
+        r = client.patch(f"/products/{product.id}", json={"min_stock": bad}, headers=admin_headers)
+        assert r.status_code == 422
 
 
 def test_filters_combine_with_pagination_total(client, admin_headers, make_product, make_category):
     cat = make_category()
     for i in range(6):
-        make_product(f"L-{i}", name="Lote", stock=i, category=cat)
-    r = client.get("/products?q=lote&low_stock=true&threshold=3&limit=2", headers=admin_headers).json()
+        make_product(f"L-{i}", name="Lote", stock=i, min_stock=3, category=cat)
+    r = client.get("/products?q=lote&low_stock=true&limit=2", headers=admin_headers).json()
     assert r["total"] == 4 and len(r["items"]) == 2

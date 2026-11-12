@@ -14,7 +14,7 @@ Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchem
 - [x] Base de datos PostgreSQL en Docker Compose
 - [x] Configuración validada por variables de entorno (`app/config.py`)
 - [x] Pruebas unitarias (configuración y endpoint raíz) y de integración (`get_db` contra PostgreSQL)
-- [ ] Modelos de productos, categorías y movimientos de stock
+- [x] Modelos SQLAlchemy (usuarios con rol, categorías, productos, movimientos de stock) y migración inicial con Alembic
 - [ ] Endpoints CRUD
 - [ ] Autenticación
 - [x] Integración continua con GitHub Actions (pruebas unitarias y de integración con PostgreSQL)
@@ -27,6 +27,9 @@ backend/
     main.py        Aplicación FastAPI
     config.py      Lectura y validación de variables de entorno
     database.py    Motor, sesión, Base declarativa y dependencia get_db
+    models.py      Modelos: User, Category, Product, StockMovement
+  alembic/         Entorno y migraciones (versions/)
+  alembic.ini
   tests/           Pruebas con pytest
     integration/   Pruebas contra PostgreSQL real
   pytest.ini
@@ -65,6 +68,26 @@ Si falta alguna variable `POSTGRES_*`, la aplicación se detiene con un mensaje 
 
 La API queda en `http://127.0.0.1:8000` y la documentación interactiva (Swagger) en `http://127.0.0.1:8000/docs`.
 
+## Base de datos y migraciones
+
+El esquema lo gestiona Alembic; la URL se toma de las variables `POSTGRES_*` (`app/config.py`). Desde `backend/`:
+
+```bash
+alembic upgrade head      # aplicar migraciones
+alembic downgrade -1      # deshacer la última
+alembic check             # falla si los modelos tienen cambios sin migración
+```
+
+Las migraciones se escriben y revisan a mano (no se confía ciegamente en `--autogenerate`).
+
+Reglas de integridad en la base de datos:
+
+- `products.sku` y `users.email` únicos.
+- `products.stock >= 0` y `products.price >= 0` (CHECK).
+- Movimientos: `entrada` y `salida` con cantidad positiva; `ajuste` con cantidad distinta de cero y con signo.
+- Las claves foráneas son `RESTRICT`: no se puede borrar un producto, usuario o categoría con registros asociados.
+- Roles (`admin`, `operator`) y tipos de movimiento (`entrada`, `salida`, `ajuste`) son enums de PostgreSQL.
+
 ## Pruebas
 
 Desde `backend/`, con el entorno virtual activo:
@@ -77,7 +100,7 @@ pytest -m "not integration"  # solo las unitarias, sin base de datos
 Las pruebas **nunca leen `backend/.env`**: `tests/conftest.py` sobrescribe las variables `POSTGRES_*` antes de importar la aplicación.
 
 - **Unitarias**: no necesitan base de datos ni archivos de entorno.
-- **Integración** (`tests/integration`): usan una base de pruebas PostgreSQL. Para ejecutarlas en local:
+- **Integración** (`tests/integration`): usan una base de pruebas PostgreSQL; las de migraciones recrean el esquema `public` de esa base, migran hasta `head` y verifican las restricciones. Para ejecutarlas en local:
 
   ```bash
   docker compose up -d
@@ -89,8 +112,8 @@ Las pruebas **nunca leen `backend/.env`**: `tests/conftest.py` sobrescribe las v
 
 ## Integración continua
 
-`.github/workflows/ci.yml` se ejecuta en cada push a `main` y a las ramas `semana-*`, y en los pull requests hacia `main`. Levanta un servicio `postgres:16`, instala `requirements-dev.txt` con Python 3.11 y ejecuta `pytest` completo.
+`.github/workflows/ci.yml` se ejecuta en cada push a `main` y a las ramas `semana-*`, y en los pull requests hacia `main`. Levanta un servicio `postgres:16`, instala `requirements-dev.txt` con Python 3.11, aplica las migraciones sobre una base vacía (`alembic upgrade head` y `alembic check`) y ejecuta `pytest` completo.
 
 ## Tecnologías
 
-Python, FastAPI, SQLAlchemy 2, psycopg 3, PostgreSQL 16, Docker Compose, pytest, GitHub Actions.
+Python, FastAPI, SQLAlchemy 2, psycopg 3, PostgreSQL 16, Alembic, Docker Compose, pytest, GitHub Actions.

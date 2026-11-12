@@ -48,5 +48,16 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements-dev.txt
 
+      - name: Aplicar migraciones sobre una base vacía
+        env:
+          POSTGRES_USER: stockwise
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5432"
+          POSTGRES_DB: stockwise
+        run: |
+          alembic upgrade head
+          alembic check
+
       - name: Ejecutar pruebas (unitarias e integración)
         run: pytest -v

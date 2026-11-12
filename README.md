@@ -16,7 +16,7 @@ Backend para la gestión de inventarios, construido con **FastAPI**, **SQLAlchem
 - [x] Pruebas unitarias (configuración y endpoint raíz) y de integración (`get_db` contra PostgreSQL)
 - [x] Modelos SQLAlchemy (usuarios con rol, categorías, productos, movimientos de stock) y migración inicial con Alembic
 - [ ] Endpoints CRUD
-- [ ] Autenticación
+- [x] Autenticación JWT con roles (`admin`, `operator`) y gestión de usuarios
 - [x] Integración continua con GitHub Actions (pruebas unitarias y de integración con PostgreSQL)
 
 ## Estructura
@@ -28,6 +28,11 @@ backend/
     config.py      Lectura y validación de variables de entorno
     database.py    Motor, sesión, Base declarativa y dependencia get_db
     models.py      Modelos: User, Category, Product, StockMovement
+    security.py    Hash argon2 de contraseñas y tokens JWT
+    deps.py        get_current_user y require_role
+    schemas.py     Esquemas Pydantic de entrada y salida
+    routers/       auth.py (login, me) y users.py (gestión de usuarios)
+    cli.py         Comandos de consola (create-admin)
   alembic/         Entorno y migraciones (versions/)
   alembic.ini
   tests/           Pruebas con pytest
@@ -57,6 +62,12 @@ pip install -r requirements-dev.txt   # incluye las de ejecución
 
 # 3. Configurar variables de entorno (edita POSTGRES_PASSWORD)
 cp .env.example .env
+# edita POSTGRES_PASSWORD y SECRET_KEY (obligatoria, mínimo 32 caracteres):
+#   python -c "import secrets; print(secrets.token_hex(32))"
+
+# 3b. Aplicar migraciones y crear el primer administrador
+alembic upgrade head
+python -m app.cli create-admin   # pide correo y contraseña (sin eco)
 
 # 4. Iniciar la API
 fastapi dev app/main.py
@@ -88,6 +99,29 @@ Reglas de integridad en la base de datos:
 - Las claves foráneas son `RESTRICT`: no se puede borrar un producto, usuario o categoría con registros asociados.
 - Roles (`admin`, `operator`) y tipos de movimiento (`entrada`, `salida`, `ajuste`) son enums de PostgreSQL.
 
+## Autenticación y roles
+
+- `POST /auth/login`: formulario OAuth2 (`username` = correo, `password`). Devuelve un token JWT de acceso (HS256) que expira a los 30 minutos por defecto (`ACCESS_TOKEN_EXPIRE_MINUTES`). El error es el mismo si el correo no existe, la contraseña falla o el usuario está inactivo.
+- `GET /auth/me`: usuario autenticado.
+- Envía el token en la cabecera `Authorization: Bearer <token>`.
+- **No hay registro público.** El primer administrador se crea con `python -m app.cli create-admin`; después, los administradores gestionan usuarios:
+
+| Endpoint | Rol |
+|---|---|
+| `POST /users` crear usuario | admin |
+| `GET /users` listar (`limit` 1-100, `offset`) | admin |
+| `PATCH /users/{id}/role` cambiar rol | admin |
+| `PATCH /users/{id}/active` activar o desactivar | admin |
+
+Permisos previstos: el `admin` gestiona usuarios, categorías y productos; el `operator` solo consulta y registra movimientos de stock.
+
+Detalles de seguridad:
+
+- Contraseñas con argon2id (`pwdlib`), de 12 a 128 caracteres; nunca se guardan ni se devuelven (las respuestas no incluyen el hash).
+- `SECRET_KEY` es obligatoria, sin valor por defecto y de al menos 32 caracteres; la aplicación no arranca si falta o es corta.
+- El rol y el estado del usuario se leen de la base en cada petición: desactivar a alguien o cambiarle el rol surte efecto de inmediato, aunque conserve un token.
+- Un administrador no puede cambiar su propio rol ni desactivarse (evita quedarse sin administradores).
+
 ## Pruebas
 
 Desde `backend/`, con el entorno virtual activo:
@@ -116,4 +150,4 @@ Las pruebas **nunca leen `backend/.env`**: `tests/conftest.py` sobrescribe las v
 
 ## Tecnologías
 
-Python, FastAPI, SQLAlchemy 2, psycopg 3, PostgreSQL 16, Alembic, Docker Compose, pytest, GitHub Actions.
+Python, FastAPI, SQLAlchemy 2, psycopg 3, PostgreSQL 16, Alembic, PyJWT, pwdlib (argon2), Docker Compose, pytest, GitHub Actions.

@@ -27,5 +27,9 @@ os.environ["POSTGRES_DB"] = _test.get("TEST_POSTGRES_DB") or (
     "stockwise_test" if _integration else "test_db"
 )
 
+# SECRET_KEY de pruebas: efímera y sin valor real. Se sobrescribe siempre.
+os.environ["SECRET_KEY"] = _test.get("TEST_SECRET_KEY") or "x" * 32
+os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
+
 # Indica a las pruebas de integración si hay credenciales reales de prueba.
 os.environ["STOCKWISE_INTEGRATION"] = "1" if _integration else "0"

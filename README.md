@@ -52,8 +52,8 @@ docker-compose.yml   PostgreSQL 16
 Requisitos: Python 3.11+ y Docker.
 
 ```bash
-# 1. Levantar la base de datos
-docker compose up -d
+# 1. Levantar la base de datos (después de crear backend/.env, paso 3)
+docker compose --env-file backend/.env up -d
 
 # 2. Crear el entorno e instalar dependencias
 cd backend
@@ -74,7 +74,7 @@ python -m app.cli create-admin   # pide correo y contraseña (sin eco)
 fastapi dev app/main.py
 ```
 
-`docker-compose.yml` lee las credenciales de `backend/.env`, así que levanta la base de datos después de crear ese archivo. Si ya existía un volumen de Postgres creado con otra contraseña, la nueva no se aplicará: usa la anterior o recrea el volumen (`docker compose down -v`, que borra los datos).
+`docker-compose.yml` toma `POSTGRES_USER`, `POSTGRES_PASSWORD` y `POSTGRES_DB` de `backend/.env` mediante `--env-file` (por eso el comando lo incluye). Esas tres son las únicas variables que llegan al contenedor de Postgres: `SECRET_KEY` y el resto del `.env` solo las lee la API. Sin `--env-file`, compose falla con un mensaje que lo indica. Si ya existía un volumen de Postgres creado con otra contraseña, la nueva no se aplicará: usa la anterior o recrea el volumen (`docker compose down -v`, que borra los datos).
 
 Si falta alguna variable `POSTGRES_*`, la aplicación se detiene con un mensaje que indica cuáles.
 
@@ -98,7 +98,7 @@ Reglas de integridad en la base de datos:
 - `products.stock >= 0` y `products.price >= 0` (CHECK).
 - Movimientos: `entrada` y `salida` con cantidad positiva; `ajuste` con cantidad distinta de cero y con signo.
 - Las claves foráneas son `RESTRICT`: no se puede borrar un producto, usuario o categoría con registros asociados.
-- Categorías y productos tienen `is_active` para el borrado lógico.
+- Categorías y productos tienen `is_active` para el borrado lógico; los productos tienen además `min_stock >= 0` (umbral de stock bajo).
 - Roles (`admin`, `operator`) y tipos de movimiento (`entrada`, `salida`, `ajuste`) son enums de PostgreSQL.
 
 ## Catálogo: categorías y productos
@@ -115,7 +115,7 @@ Lectura para `admin` y `operator`; escritura solo `admin`. La documentación int
 - **Borrar = `is_active=false`** (borrado lógico, idempotente); se restaura con `PATCH` y `is_active=true`. Los inactivos no aparecen en las listas ni (para el `operator`) en el detalle; el `admin` los ve con `include_inactive=true`. No se puede desactivar una categoría con productos activos (409).
 - **El stock no se edita por la API de productos.** Nace en 0 y solo cambiará con movimientos de stock; enviar `stock` al crear o actualizar devuelve 422.
 - **Paginación**: `limit` (1-100, 20 por defecto) y `offset`. La respuesta es `{items, total, limit, offset}`.
-- **Búsqueda y filtros de productos**: `q` (texto en nombre o SKU, sin distinguir mayúsculas; `%` y `_` se tratan como texto), `category_id` y `low_stock=true` (stock <= `threshold`, 10 por defecto). Las categorías admiten `q` por nombre.
+- **Búsqueda y filtros de productos**: `q` (texto en nombre o SKU, sin distinguir mayúsculas; `%` y `_` se tratan como texto), `category_id` y `low_stock=true` (productos con `stock <= min_stock`; el umbral `min_stock`, 0 por defecto, es propio de cada producto y se edita con `PATCH`). Las categorías admiten `q` por nombre.
 - **SKU**: se normaliza a mayúsculas, admite letras, dígitos, `.`, `-` y `_`, y es único (409 si se repite). El precio admite como máximo 2 decimales y no puede ser negativo. Un producto solo puede asignarse a una categoría existente y activa (422).
 - **Formato de error único**: `{"detail": "mensaje", "code": "not_found", "errors": [{"field": "body.price", "message": "..."}]}`. `errors` solo aparece en validaciones (422) y nunca incluye los valores enviados. Códigos: `bad_request`, `unauthorized`, `forbidden`, `not_found`, `method_not_allowed`, `conflict`, `validation_error`.
 
@@ -137,6 +137,8 @@ Permisos previstos: el `admin` gestiona usuarios, categorías y productos; el `o
 
 Detalles de seguridad:
 
+- **Límite de intentos de login:** tras 5 intentos fallidos en 15 minutos para la misma combinación IP + correo, `POST /auth/login` responde `429` con `code: "too_many_requests"` y la cabecera `Retry-After` (segundos). Cuenta igual si el correo existe o no, bloquea también la contraseña correcta mientras dure y un login correcto reinicia el contador. **Limitación:** es una implementación propia en memoria (sin dependencias), así que el contador no se comparte entre varias instancias ni sobrevive a un reinicio, y la IP es la de la conexión directa (detrás de un proxy inverso habría que configurarlo para que informe la IP real). Para varias instancias haría falta un almacén compartido, como Redis.
+
 - Contraseñas con argon2id (`pwdlib`), de 12 a 128 caracteres; nunca se guardan ni se devuelven (las respuestas no incluyen el hash).
 - `SECRET_KEY` es obligatoria, sin valor por defecto y de al menos 32 caracteres; la aplicación no arranca si falta o es corta.
 - El rol y el estado del usuario se leen de la base en cada petición: desactivar a alguien o cambiarle el rol surte efecto de inmediato, aunque conserve un token.
@@ -157,7 +159,7 @@ Las pruebas **nunca leen `backend/.env`**: `tests/conftest.py` sobrescribe las v
 - **Integración** (`tests/integration`): usan una base de pruebas PostgreSQL; las de migraciones recrean el esquema `public` de esa base, migran hasta `head` y verifican las restricciones. Para ejecutarlas en local:
 
   ```bash
-  docker compose up -d
+  docker compose --env-file backend/.env up -d
   cp .env.test.example .env.test   # ajusta TEST_POSTGRES_PASSWORD
   pytest
   ```
